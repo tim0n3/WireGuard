@@ -3,8 +3,6 @@
 # https://github.com/tim0n3/WireGuard
 #
 # Copyright (c) 2021 tim0n3. Released under the GNUv3 License.
-# All credit goes to Nyr for most of the codebase. 
-# Copyright (c) 2013 Nyr. Released under the MIT License. https://github.com/Nyr/wireguard-install/
 
 
 # Detect Debian users running the script with "sh" instead of bash
@@ -30,15 +28,15 @@ if grep -qs "ubuntu" /etc/os-release; then
 elif [[ -e /etc/debian_version ]]; then
 	os="debian"
 	os_version=$(grep -oE '[0-9]+' /etc/debian_version | head -1)
-elif [[ -e /etc/centos-release ]]; then
+elif [[ -e /etc/almalinux-release || -e /etc/rocky-release || -e /etc/centos-release ]]; then
 	os="centos"
-	os_version=$(grep -oE '[0-9]+' /etc/centos-release | head -1)
+	os_version=$(grep -shoE '[0-9]+' /etc/almalinux-release /etc/rocky-release /etc/centos-release | head -1)
 elif [[ -e /etc/fedora-release ]]; then
 	os="fedora"
 	os_version=$(grep -oE '[0-9]+' /etc/fedora-release | head -1)
 else
 	echo "This installer seems to be running on an unsupported distribution.
-Supported distributions are Ubuntu, Debian, CentOS, and Fedora."
+Supported distros are Ubuntu, Debian, AlmaLinux, Rocky Linux, CentOS and Fedora."
 	exit
 fi
 
@@ -112,13 +110,13 @@ new_client_dns () {
 		1|"")
 			# Locate the proper resolv.conf
 			# Needed for systems running systemd-resolved
-			if grep -q '^nameserver 127.0.0.53' "/etc/resolv.conf"; then
-				resolv_conf="/run/systemd/resolve/resolv.conf"
-			else
+			if grep '^nameserver' "/etc/resolv.conf" | grep -qv '127.0.0.53' ; then
 				resolv_conf="/etc/resolv.conf"
+			else
+				resolv_conf="/run/systemd/resolve/resolv.conf"
 			fi
 			# Extract nameservers and provide them in the required format
-			dns=$(grep -v '^#\|^;' "$resolv_conf" | grep '^nameserver' | grep -oE '[0-9]{1,3}(\.[0-9]{1,3}){3}' | xargs | sed -e 's/ /, /g')
+			dns=$(grep -v '^#\|^;' "$resolv_conf" | grep '^nameserver' | grep -v '127.0.0.53' | grep -oE '[0-9]{1,3}(\.[0-9]{1,3}){3}' | xargs | sed -e 's/ /, /g')
 		;;
 		2)
 			dns="8.8.8.8, 8.8.4.4"
@@ -260,7 +258,8 @@ if [[ ! -e /etc/wireguard/wg0.conf ]]; then
 			echo "$remove: invalid selection."
 			read -p "Should automatic updates be enabled for it? [Y/n]: " boringtun_updates
 		done
-		if [[ "$boringtun_updates" =~ ^[yY]*$ ]]; then
+		[[ -z "$boringtun_updates" ]] && boringtun_updates="y"
+		if [[ "$boringtun_updates" =~ ^[yY]$ ]]; then
 			if [[ "$os" == "centos" || "$os" == "fedora" ]]; then
 				cron="cronie"
 			elif [[ "$os" == "debian" || "$os" == "ubuntu" ]]; then
@@ -270,7 +269,7 @@ if [[ ! -e /etc/wireguard/wg0.conf ]]; then
 	fi
 	echo
 	echo "WireGuard installation is ready to begin."
-	# Install a firewall in the rare case where one is not already available
+	# Install a firewall if firewalld or iptables are not already available
 	if ! systemctl is-active --quiet firewalld.service && ! hash iptables 2>/dev/null; then
 		if [[ "$os" == "centos" || "$os" == "fedora" ]]; then
 			firewall="firewalld"
@@ -288,6 +287,10 @@ if [[ ! -e /etc/wireguard/wg0.conf ]]; then
 	if [[ ! "$is_container" -eq 0 ]]; then
 		if [[ "$os" == "ubuntu" ]]; then
 			# Ubuntu
+			apt-get update
+			apt-get install -y wireguard qrencode $firewall
+		elif [[ "$os" == "debian" && "$os_version" -ge 11 ]]; then
+			# Debian 11 or higher
 			apt-get update
 			apt-get install -y wireguard qrencode $firewall
 		elif [[ "$os" == "debian" && "$os_version" -eq 10 ]]; then
@@ -308,6 +311,10 @@ if [[ ! -e /etc/wireguard/wg0.conf ]]; then
 			# kernel updates.
 			apt-get install -y linux-headers-"$architecture"
 			apt-get install -y wireguard qrencode $firewall
+		elif [[ "$os" == "centos" && "$os_version" -ge 9 ]]; then
+			# CentOS 9 or higher
+			dnf install -y epel-release
+			dnf install -y wireguard-tools qrencode $firewall
 		elif [[ "$os" == "centos" && "$os_version" -eq 8 ]]; then
 			# CentOS 8
 			dnf install -y epel-release elrepo-release
@@ -332,6 +339,11 @@ if [[ ! -e /etc/wireguard/wg0.conf ]]; then
 			apt-get update
 			apt-get install -y qrencode ca-certificates $cron $firewall
 			apt-get install -y wireguard-tools --no-install-recommends
+		elif [[ "$os" == "debian" && "$os_version" -ge 11 ]]; then
+			# Debian 11 or higher
+			apt-get update
+			apt-get install -y qrencode ca-certificates $cron $firewall
+			apt-get install -y wireguard-tools --no-install-recommends
 		elif [[ "$os" == "debian" && "$os_version" -eq 10 ]]; then
 			# Debian 10
 			if ! grep -qs '^deb .* buster-backports main' /etc/apt/sources.list /etc/apt/sources.list.d/*.list; then
@@ -340,6 +352,10 @@ if [[ ! -e /etc/wireguard/wg0.conf ]]; then
 			apt-get update
 			apt-get install -y qrencode ca-certificates $cron $firewall
 			apt-get install -y wireguard-tools --no-install-recommends
+		elif [[ "$os" == "centos" && "$os_version" -ge 9 ]]; then
+			# CentOS 9 or higher
+			dnf install -y epel-release
+			dnf install -y wireguard-tools qrencode ca-certificates tar $cron $firewall
 		elif [[ "$os" == "centos" && "$os_version" -eq 8 ]]; then
 			# CentOS 8
 			dnf install -y epel-release
@@ -357,7 +373,7 @@ if [[ ! -e /etc/wireguard/wg0.conf ]]; then
 		fi
 		# Grab the BoringTun binary using wget or curl and extract into the right place.
 		# Don't use this service elsewhere without permission! Contact me before you do!
-		{ wget -qO- https://wg.nyr.be/1/latest/download 2>/dev/null || curl -sL https://wg.nyr.be/1/latest/download ; } | tar xz -C /usr/local/sbin/ --wildcards 'boringtun-*/boringtun' --strip-components 1
+		{ wget -qO- https://github.com/cloudflare/boringtun/archive/refs/tags/boringtun-cli-0.5.2.tar.gz 2>/dev/null || curl -sL https://github.com/cloudflare/boringtun/archive/refs/tags/boringtun-cli-0.5.2.tar.gz ; } | tar xz -C /usr/local/sbin/ --wildcards 'boringtun-*/boringtun' --strip-components 1
 		# Configure wg-quick to use BoringTun
 		mkdir /etc/systemd/system/wg-quick@wg0.service.d/ 2>/dev/null
 		echo "[Service]
@@ -427,42 +443,43 @@ Type=oneshot
 ExecStart=$iptables_path -t nat -A POSTROUTING -s 10.7.0.0/24 ! -d 10.7.0.0/24 -j SNAT --to $ip
 ExecStart=$iptables_path -I INPUT -p udp --dport $port -j ACCEPT
 ExecStart=$iptables_path -I FORWARD -s 10.7.0.0/24 -j ACCEPT
-ExecStart=$iptables_path -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
+ExecStart=$iptables_path -I FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
 ExecStop=$iptables_path -t nat -D POSTROUTING -s 10.7.0.0/24 ! -d 10.7.0.0/24 -j SNAT --to $ip
 ExecStop=$iptables_path -D INPUT -p udp --dport $port -j ACCEPT
 ExecStop=$iptables_path -D FORWARD -s 10.7.0.0/24 -j ACCEPT
-ExecStop=$iptables_path -D FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT" > /etc/systemd/system/wg-iptables.service
+ExecStop=$iptables_path -D FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT" > /etc/systemd/system/wg-iptables.service
 		if [[ -n "$ip6" ]]; then
 			echo "ExecStart=$ip6tables_path -t nat -A POSTROUTING -s fddd:2c4:2c4:2c4::/64 ! -d fddd:2c4:2c4:2c4::/64 -j SNAT --to $ip6
 ExecStart=$ip6tables_path -I FORWARD -s fddd:2c4:2c4:2c4::/64 -j ACCEPT
-ExecStart=$ip6tables_path -I FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
+ExecStart=$ip6tables_path -I FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
 ExecStop=$ip6tables_path -t nat -D POSTROUTING -s fddd:2c4:2c4:2c4::/64 ! -d fddd:2c4:2c4:2c4::/64 -j SNAT --to $ip6
 ExecStop=$ip6tables_path -D FORWARD -s fddd:2c4:2c4:2c4::/64 -j ACCEPT
-ExecStop=$ip6tables_path -D FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT" >> /etc/systemd/system/wg-iptables.service
+ExecStop=$ip6tables_path -D FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT" >> /etc/systemd/system/wg-iptables.service
 		fi
 		echo "RemainAfterExit=yes
 [Install]
 WantedBy=multi-user.target" >> /etc/systemd/system/wg-iptables.service
-#		systemctl enable --now wg-iptables.service
+		systemctl enable --now wg-iptables.service
 	fi
 	# Generates the custom client.conf
 	new_client_setup
 	# Enable and start the wg-quick service
 	systemctl enable --now wg-quick@wg0.service
 	# Set up automatic updates for BoringTun if the user wanted to
-	if [[ "$boringtun_updates" =~ ^[yY]*$ ]]; then
+	if [[ "$boringtun_updates" =~ ^[yY]$ ]]; then
 		# Deploy upgrade script
 		cat << 'EOF' > /usr/local/sbin/boringtun-upgrade
 #!/bin/bash
+# Use Nyr version page to check the latest version of BoringTun when checking for updates then update the github link to binary automagically
 latest=$(wget -qO- https://wg.nyr.be/1/latest 2>/dev/null || curl -sL https://wg.nyr.be/1/latest 2>/dev/null)
 # If server did not provide an appropriate response, exit
 if ! head -1 <<< "$latest" | grep -qiE "^boringtun.+[0-9]+\.[0-9]+.*$"; then
 	echo "Update server unavailable"
 	exit
 fi
-current=$(boringtun -V)
+current=$(/usr/local/sbin/boringtun -V)
 if [[ "$current" != "$latest" ]]; then
-	download="https://wg.nyr.be/1/latest/download"
+	download="https://github.com/cloudflare/boringtun/archive/refs/tags/boringtun-cli-0.5.2.tar.gz"
 	xdir=$(mktemp -d)
 	# If download and extraction are successful, upgrade the boringtun binary
 	if { wget -qO- "$download" 2>/dev/null || curl -sL "$download" ; } | tar xz -C "$xdir" --wildcards "boringtun-*/boringtun" --strip-components 1; then
@@ -470,7 +487,7 @@ if [[ "$current" != "$latest" ]]; then
 		rm -f /usr/local/sbin/boringtun
 		mv "$xdir"/boringtun /usr/local/sbin/boringtun
 		systemctl start wg-quick@wg0.service
-		echo "Succesfully updated to $(boringtun -V)"
+		echo "Succesfully updated to $(/usr/local/sbin/boringtun -V)"
 	else
 		echo "boringtun update failed"
 	fi
@@ -488,14 +505,14 @@ EOF
 	echo -e '\xE2\x86\x91 That is a QR code containing the client configuration.'
 	echo
 	# If the kernel module didn't load, system probably had an outdated kernel
-	# We'll try to help, but will not will not force a kernel upgrade upon the user
+	# We'll try to help, but will not force a kernel upgrade upon the user
 	if [[ ! "$is_container" -eq 0 ]] && ! modprobe -nq wireguard; then
 		echo "Warning!"
 		echo "Installation was finished, but the WireGuard kernel module could not load."
 		if [[ "$os" == "ubuntu" && "$os_version" -eq 1804 ]]; then
-		echo 'Upgrade the kernel and headers with "apt-get install linux-generic" and restart.'
+			echo 'Upgrade the kernel and headers with "apt-get install linux-generic" and restart.'
 		elif [[ "$os" == "debian" && "$os_version" -eq 10 ]]; then
-		echo "Upgrade the kernel with \"apt-get install linux-image-$architecture\" and restart."
+			echo "Upgrade the kernel with \"apt-get install linux-image-$architecture\" and restart."
 		elif [[ "$os" == "centos" && "$os_version" -le 8 ]]; then
 			echo "Reboot the system to load the most recent kernel."
 		fi
@@ -572,7 +589,7 @@ else
 				# Remove from the live interface
 				wg set wg0 peer "$(sed -n "/^# BEGIN_PEER $client$/,\$p" /etc/wireguard/wg0.conf | grep -m 1 PublicKey | cut -d " " -f 3)" remove
 				# Remove from the configuration file
-				sed -i "/^# BEGIN_PEER $client/,/^# END_PEER $client/d" /etc/wireguard/wg0.conf
+				sed -i "/^# BEGIN_PEER $client$/,/^# END_PEER $client$/d" /etc/wireguard/wg0.conf
 				echo
 				echo "$client removed!"
 			else
@@ -619,22 +636,30 @@ else
 						# Ubuntu
 						rm -rf /etc/wireguard/
 						apt-get remove --purge -y wireguard wireguard-tools
+					elif [[ "$os" == "debian" && "$os_version" -ge 11 ]]; then
+						# Debian 11 or higher
+						rm -rf /etc/wireguard/
+						apt-get remove --purge -y wireguard wireguard-tools
 					elif [[ "$os" == "debian" && "$os_version" -eq 10 ]]; then
 						# Debian 10
 						rm -rf /etc/wireguard/
 						apt-get remove --purge -y wireguard wireguard-dkms wireguard-tools
+					elif [[ "$os" == "centos" && "$os_version" -ge 9 ]]; then
+						# CentOS 9 or higher
+						dnf remove -y wireguard-tools
+						rm -rf /etc/wireguard/
 					elif [[ "$os" == "centos" && "$os_version" -eq 8 ]]; then
 						# CentOS 8
-						rm -rf /etc/wireguard/
 						dnf remove -y kmod-wireguard wireguard-tools
+						rm -rf /etc/wireguard/
 					elif [[ "$os" == "centos" && "$os_version" -eq 7 ]]; then
 						# CentOS 7
-						rm -rf /etc/wireguard/
 						yum remove -y kmod-wireguard wireguard-tools
+						rm -rf /etc/wireguard/
 					elif [[ "$os" == "fedora" ]]; then
 						# Fedora
-						rm -rf /etc/wireguard/
 						dnf remove -y wireguard-tools
+						rm -rf /etc/wireguard/
 					fi
 				else
 					{ crontab -l 2>/dev/null | grep -v '/usr/local/sbin/boringtun-upgrade' ; } | crontab -
@@ -642,22 +667,30 @@ else
 						# Ubuntu
 						rm -rf /etc/wireguard/
 						apt-get remove --purge -y wireguard-tools
+					elif [[ "$os" == "debian" && "$os_version" -ge 11 ]]; then
+						# Debian 11 or higher
+						rm -rf /etc/wireguard/
+						apt-get remove --purge -y wireguard-tools
 					elif [[ "$os" == "debian" && "$os_version" -eq 10 ]]; then
 						# Debian 10
 						rm -rf /etc/wireguard/
 						apt-get remove --purge -y wireguard-tools
+					elif [[ "$os" == "centos" && "$os_version" -ge 9 ]]; then
+						# CentOS 9 or higher
+						dnf remove -y wireguard-tools
+						rm -rf /etc/wireguard/
 					elif [[ "$os" == "centos" && "$os_version" -eq 8 ]]; then
 						# CentOS 8
-						rm -rf /etc/wireguard/
 						dnf remove -y wireguard-tools
+						rm -rf /etc/wireguard/
 					elif [[ "$os" == "centos" && "$os_version" -eq 7 ]]; then
 						# CentOS 7
-						rm -rf /etc/wireguard/
 						yum remove -y wireguard-tools
+						rm -rf /etc/wireguard/
 					elif [[ "$os" == "fedora" ]]; then
 						# Fedora
-						rm -rf /etc/wireguard/
 						dnf remove -y wireguard-tools
+						rm -rf /etc/wireguard/
 					fi
 					rm -f /usr/local/sbin/boringtun /usr/local/sbin/boringtun-upgrade
 				fi
